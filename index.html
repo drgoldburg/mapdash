@@ -762,6 +762,7 @@ $('#pub-forget').onclick = () => {
   const s = getPub(); s.token = ''; setPub(s, false);
   $('#pub-token').value = '';
   $('#pub-msg').textContent = 'Key removed from this computer.'; $('#pub-msg').className = 'msg good';
+  if (!$('#home').classList.contains('hidden')) loadPublishedList();
 };
 $('#pub-form').onsubmit = async e => {
   e.preventDefault();
@@ -837,7 +838,10 @@ function showPubResult(url, updated) {
 async function loadPublishedList() {
   const s = getPub(), list = $('#pub-list'), m = $('#pub-list-msg');
   list.innerHTML = '';
-  if (!s.repo) { m.textContent = 'Not set up yet. Click "Publishing settings" to connect your quiz website.'; return; }
+  const locked = !s.repo || !s.token;
+  $('#pub-refresh').classList.toggle('hidden', locked);
+  $('#home-pubset').textContent = locked ? 'Enter publishing key' : 'Publishing settings';
+  if (locked) { m.textContent = 'Enter the publishing key to see and manage published quizzes.'; return; }
   m.textContent = 'Loading…';
   try {
     const r = await gh(`/repos/${s.repo}/contents/${encPath(s.folder)}?ref=${encodeURIComponent(s.branch)}`, {}, s.token);
