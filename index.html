@@ -187,6 +187,18 @@
   .pub-list li:last-child{border-bottom:none}
   .pub-list .nm{flex:1;min-width:180px;font-weight:700;text-transform:capitalize}
   .pub-list a{color:var(--ink);font-weight:600}
+  .pub-list li.group{border-bottom:none;padding:18px 0 2px;gap:10px;align-items:baseline}
+  .pub-list li.group:first-child{padding-top:4px}
+  .pub-list li.group h3{margin:0;font-size:20px}
+  .pub-list li.msg{border-bottom:none;padding:4px 0 10px}
+  select{font:inherit;padding:7px 10px;border:2px solid var(--ink);border-radius:10px;background:#fff;color:var(--ink);width:100%;cursor:pointer}
+  select:focus-visible{outline:3px solid var(--sea);outline-offset:2px}
+  select.needs{border-style:dashed;border-color:var(--tomato)}
+  .teacher-box{display:flex;flex-direction:column;gap:8px;background:var(--mist);border:2px solid var(--ink);border-radius:12px;padding:12px}
+  .teacher-box label{font-size:14px}
+  .add-teacher{display:flex;flex-direction:column;gap:8px}
+  .filter{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
+  .filter select{width:auto;padding:3px 8px;font-size:14px}
 
   @media (max-width:860px){
     .home-grid{grid-template-columns:1fr}
@@ -233,7 +245,9 @@
     <div class="card published" id="home-pub">
       <div class="row" style="justify-content:space-between;align-items:center">
         <div><h2>Published quizzes</h2><span class="msg" id="pub-list-msg"></span></div>
-        <div class="row"><button class="small" id="pub-refresh">Refresh</button><button class="small" id="home-pubset">Publishing settings</button></div>
+        <div class="row" style="align-items:center">
+          <label class="filter hidden" id="pub-filter-wrap">Show <select id="pub-filter"></select></label>
+          <button class="small" id="pub-refresh">Refresh</button><button class="small" id="home-pubset">Publishing settings</button></div>
       </div>
       <ul class="pub-list" id="pub-list"></ul>
     </div>
@@ -269,6 +283,16 @@
         <div class="row"><button class="small" id="ed-replace">Replace map image</button></div>
         <h3>Places (<span id="ed-count">0</span>)</h3>
         <ol id="ed-list"></ol>
+        <div class="teacher-box hidden" id="ed-teacher-box">
+          <label>Teacher <select id="ed-teacher"></select></label>
+          <div class="add-teacher hidden" id="ed-addteacher">
+            <input id="ed-newteacher" placeholder="Name students know, like Ms. Rivera" maxlength="40" autocomplete="off">
+            <div class="row">
+              <button class="small primary" id="ed-addteacher-btn">Add teacher</button>
+              <button class="small" id="ed-addteacher-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
         <div class="msg" id="ed-msg"></div>
         <div class="pub-result hidden" id="ed-pub-result"></div>
         <div class="stack">
@@ -426,7 +450,9 @@ function normalize(raw) {
     image: typeof raw.image === 'string' ? raw.image : null,
     dotSize: isFinite(raw.dotSize) ? clamp(+raw.dotSize, 8, 30) : 16,
     points,
-    publishedName: typeof raw.publishedName === 'string' ? raw.publishedName : null
+    publishedPath: typeof raw.publishedPath === 'string' ? raw.publishedPath
+      : typeof raw.publishedName === 'string' ? 'quizzes/' + raw.publishedName : null,
+    teacher: typeof raw.teacher === 'string' ? raw.teacher : null
   };
 }
 function readEmbedded() {
@@ -466,12 +492,14 @@ let ed = null, pop = null, drag = null, draftTimer = null;
 const edStage = $('#ed-stage'), edLayer = $('#ed-layer'), edPop = $('#ed-pop'), edInput = $('#ed-pop-input');
 
 function openEditor(q) {
-  ed = normalize(q) || blankQuiz();
+  ed = normalize(q) || normalize(blankQuiz());
+  if (ed.teacher === null) ed.teacher = lsGet(TEACHER_KEY);
   pop = null; edPop.classList.add('hidden');
   edMsg(''); $('#ed-pub-result').classList.add('hidden');
   show('editor');
   renderEditor();
   saveDraft();
+  prepTeacherPicker();
 }
 function edMsg(text, kind) {
   const m = $('#ed-msg'); m.textContent = text; m.className = 'msg' + (kind ? ' ' + kind : '');
@@ -734,7 +762,8 @@ function b64utf8(str) {
   return btoa(bin);
 }
 async function gh(path, opts = {}, token) {
-  const headers = { 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  const { accept, ...rest } = opts; opts = rest;
+  const headers = { 'Accept': accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
   if (token) headers.Authorization = 'Bearer ' + token;
   if (opts.body) headers['Content-Type'] = 'application/json';
   return fetch('https://api.github.com' + path, { ...opts, headers, cache: 'no-store' });
@@ -763,6 +792,7 @@ $('#pub-forget').onclick = () => {
   $('#pub-token').value = '';
   $('#pub-msg').textContent = 'Key removed from this computer.'; $('#pub-msg').className = 'msg good';
   if (!$('#home').classList.contains('hidden')) loadPublishedList();
+  renderTeacherPicker();
 };
 $('#pub-form').onsubmit = async e => {
   e.preventDefault();
@@ -778,38 +808,197 @@ $('#pub-form').onsubmit = async e => {
     if (!r.ok) { m.textContent = ghError(r); m.className = 'msg bad'; return; }
   } catch { m.textContent = "Couldn't reach GitHub. Check the internet connection."; m.className = 'msg bad'; return; }
   setPub(s, $('#pub-remember').checked);
+  teachers = null;
   dlg.close();
+  if (!$('#editor').classList.contains('hidden')) prepTeacherPicker();
   const then = afterSettings; afterSettings = null;
   if (then) then(); else loadPublishedList();
 };
 $('#home-pubset').onclick = () => openPubSettings();
 
-// Publish the quiz being edited
+// ---- Teachers ----
+// Each teacher gets a folder inside the quiz folder (quizzes/ms-rivera/...).
+// Display names live in quizzes/teachers.json; folders made by hand on GitHub also show up.
+const TEACHER_KEY = 'mapquiz-teacher', FILTER_KEY = 'mapquiz-listfilter';
+let teachers = null;   // [{ name, folder }]
+const lsGet = k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+const quizRoot = s => s.folder ? s.folder + '/' : '';
+const folderFor = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const titleize = f => f.split('-').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+function teacherName(folder) {
+  const t = (teachers || []).find(t => t.folder === folder);
+  return t ? t.name : titleize(folder);
+}
+function decodeB64(c) {
+  const bin = atob((c || '').replace(/\s/g, ''));
+  return new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0)));
+}
+async function readTeachersFile(s) {
+  const r = await gh(`/repos/${s.repo}/contents/${encPath(quizRoot(s) + 'teachers.json')}?ref=${encodeURIComponent(s.branch)}`, {}, s.token);
+  if (r.status === 404) return { list: [], sha: null };
+  if (!r.ok) throw r;
+  const j = await r.json();
+  let list = [];
+  try { list = JSON.parse(decodeB64(j.content)); } catch {}
+  if (!Array.isArray(list)) list = [];
+  list = list.filter(t => t && t.name && t.folder).map(t => ({ name: String(t.name), folder: String(t.folder) }));
+  return { list, sha: j.sha };
+}
+// Every published quiz in one request: [{ path, sha, name, teacher }]. teacher is '' for unsorted quizzes.
+async function readQuizTree(s) {
+  const r = await gh(`/repos/${s.repo}/git/trees/${encodeURIComponent(s.branch)}?recursive=1`, {}, s.token);
+  if (r.status === 404 || r.status === 409) return [];
+  if (!r.ok) throw r;
+  const root = quizRoot(s);
+  return ((await r.json()).tree || [])
+    .filter(e => e.type === 'blob' && e.path.startsWith(root) && /\.html$/i.test(e.path))
+    .map(e => {
+      const parts = e.path.slice(root.length).split('/');
+      const name = parts[parts.length - 1];
+      if (parts.length > 2 || name.toLowerCase() === 'index.html') return null;
+      return { path: e.path, sha: e.sha, name, teacher: parts.length === 2 ? parts[0] : '' };
+    })
+    .filter(Boolean);
+}
+async function loadTeachers(s, quizzes) {
+  const { list } = await readTeachersFile(s);
+  const seen = new Set(list.map(t => t.folder));
+  quizzes.forEach(q => {
+    if (q.teacher && !seen.has(q.teacher)) { seen.add(q.teacher); list.push({ name: titleize(q.teacher), folder: q.teacher }); }
+  });
+  list.sort((a, b) => a.name.localeCompare(b.name));
+  teachers = list;
+  return list;
+}
+async function ensureTeachers(s, force) {
+  if (teachers && !force) return teachers;
+  return loadTeachers(s, await readQuizTree(s));
+}
+
+// Teacher picker in the editor (only shown once a key is entered)
+function renderTeacherPicker() {
+  if (!ed) return;
+  const s = getPub(), box = $('#ed-teacher-box'), sel = $('#ed-teacher');
+  const on = !!(s.repo && s.token);
+  box.classList.toggle('hidden', !on);
+  if (!on) return;
+  sel.innerHTML = '';
+  sel.append(new Option(teachers ? 'Choose your name' : 'Loading names…', ''));
+  (teachers || []).forEach(t => sel.append(new Option(t.name, t.folder)));
+  if (teachers) sel.append(new Option('+ Add a new teacher', '__add'));
+  sel.value = (teachers || []).some(t => t.folder === ed.teacher) ? ed.teacher : '';
+  sel.classList.toggle('needs', teachers && !sel.value);
+}
+async function prepTeacherPicker() {
+  const s = getPub();
+  $('#ed-addteacher').classList.add('hidden');
+  renderTeacherPicker();
+  if (!s.repo || !s.token) return;
+  try { await ensureTeachers(s); } catch { edMsg("Couldn't load the list of teachers from GitHub.", 'bad'); }
+  renderTeacherPicker();
+}
+$('#ed-teacher').onchange = e => {
+  const v = e.target.value;
+  if (v === '__add') {
+    e.target.value = (teachers || []).some(t => t.folder === ed.teacher) ? ed.teacher : '';
+    $('#ed-addteacher').classList.remove('hidden');
+    $('#ed-newteacher').value = '';
+    $('#ed-newteacher').focus();
+    return;
+  }
+  $('#ed-addteacher').classList.add('hidden');
+  ed.teacher = v;
+  if (v) lsSet(TEACHER_KEY, v);
+  e.target.classList.toggle('needs', !v);
+  saveDraft();
+};
+$('#ed-newteacher').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); addTeacher(); }
+  if (e.key === 'Escape') { e.preventDefault(); $('#ed-addteacher').classList.add('hidden'); }
+});
+$('#ed-addteacher-btn').onclick = () => addTeacher();
+$('#ed-addteacher-cancel').onclick = () => $('#ed-addteacher').classList.add('hidden');
+async function addTeacher() {
+  const s = getPub();
+  const name = $('#ed-newteacher').value.trim().replace(/\s+/g, ' ');
+  const folder = folderFor(name);
+  if (!folder) return edMsg('Type the teacher name the way students know it, like Ms. Rivera.', 'bad');
+  const existing = (teachers || []).find(t => t.folder === folder);
+  const pick = f => {
+    ed.teacher = f; lsSet(TEACHER_KEY, f); saveDraft();
+    $('#ed-addteacher').classList.add('hidden');
+    renderTeacherPicker();
+  };
+  if (existing) { pick(existing.folder); return edMsg(`${existing.name} is already on the list, so we picked it.`, 'good'); }
+  const btn = $('#ed-addteacher-btn');
+  btn.disabled = true; edMsg('Adding…');
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { list, sha } = await readTeachersFile(s);
+      if (!list.some(t => t.folder === folder)) list.push({ name, folder });
+      list.sort((a, b) => a.name.localeCompare(b.name));
+      const body = { message: 'Add teacher: ' + name, content: b64utf8(JSON.stringify(list, null, 2) + '\n'), branch: s.branch };
+      if (sha) body.sha = sha;
+      const r = await gh(`/repos/${s.repo}/contents/${encPath(quizRoot(s) + 'teachers.json')}`, { method: 'PUT', body: JSON.stringify(body) }, s.token);
+      if (r.ok) break;
+      if (!(r.status === 409 && attempt === 0)) { edMsg(ghError(r), 'bad'); return; }
+    }
+    await ensureTeachers(s, true);
+    pick(folder);
+    edMsg(`Added ${name}. Click Publish when you're ready.`, 'good');
+  } catch (r) {
+    edMsg(r instanceof Response ? ghError(r) : "Couldn't reach GitHub. Try again.", 'bad');
+  } finally { btn.disabled = false; }
+}
+
+// ---- Publish the quiz being edited ----
 $('#ed-publish').onclick = () => publish();
 async function publish() {
   if (pop) closePopover(true);
   const err = validate(); if (err) return edMsg(err, 'bad');
   const s = getPub();
   if (!s.repo || !s.token) return openPubSettings(publish);
-  let name = ed.publishedName || slug(ed.title) + '.html';
-  if (name.toLowerCase() === 'index.html') name = 'index-quiz.html';  // never overwrite the maker
-  const path = (s.folder ? s.folder + '/' : '') + name;
   const btn = $('#ed-publish');
-  btn.disabled = true; edMsg('Publishing…'); $('#ed-pub-result').classList.add('hidden');
+  btn.disabled = true; $('#ed-pub-result').classList.add('hidden');
   try {
+    try { await ensureTeachers(s); } catch (r) { edMsg(r instanceof Response ? ghError(r) : "Couldn't reach GitHub. Try again.", 'bad'); return; }
+    renderTeacherPicker();
+    if (!ed.teacher || !teachers.some(t => t.folder === ed.teacher)) {
+      edMsg('Choose your name under Teacher, then click Publish again.', 'bad');
+      $('#ed-teacher').focus();
+      return;
+    }
+    const tName = teacherName(ed.teacher);
+    let file = ed.publishedPath ? ed.publishedPath.split('/').pop() : slug(ed.title) + '.html';
+    if (file.toLowerCase() === 'index.html') file = 'index-quiz.html';
+    const path = quizRoot(s) + ed.teacher + '/' + file;
+    const oldPath = ed.publishedPath && ed.publishedPath !== path ? ed.publishedPath : null;
+    if (oldPath && !confirm(`Move this quiz into ${tName}'s quizzes? It will get a new link, and the old link will stop working.`)) { edMsg('Not published.'); return; }
+    edMsg('Publishing…');
     let sha = null;
     const g = await gh(`/repos/${s.repo}/contents/${encPath(path)}?ref=${encodeURIComponent(s.branch)}`, {}, s.token);
     if (g.ok) {
       sha = (await g.json()).sha;
-      if (!ed.publishedName && !confirm(`A quiz called "${name}" is already published. Replace it with this one?`)) { edMsg('Not published. Change the quiz title to publish it under a new name.'); return; }
+      if (path !== ed.publishedPath && !confirm(`${tName} already has a published quiz called "${file.replace(/\.html$/i, '').replace(/-/g, ' ')}". Replace it with this one?`)) {
+        edMsg('Not published. Change the quiz title to publish it as a separate quiz.'); return;
+      }
     } else if (g.status !== 404) { edMsg(ghError(g), 'bad'); return; }
-    const body = { message: `${sha ? 'Update' : 'Add'} quiz: ${ed.title.trim() || name}`, content: b64utf8(buildStudentHtml()), branch: s.branch };
+    const body = { message: `${sha ? 'Update' : 'Add'} quiz for ${tName}: ${ed.title.trim() || file}`, content: b64utf8(buildStudentHtml()), branch: s.branch };
     if (sha) body.sha = sha;
     const put = await gh(`/repos/${s.repo}/contents/${encPath(path)}`, { method: 'PUT', body: JSON.stringify(body) }, s.token);
     if (!put.ok) { edMsg(ghError(put), 'bad'); return; }
-    ed.publishedName = name; saveDraft();
+    if (oldPath) {
+      const og = await gh(`/repos/${s.repo}/contents/${encPath(oldPath)}?ref=${encodeURIComponent(s.branch)}`, {}, s.token);
+      if (og.ok) {
+        const osha = (await og.json()).sha;
+        await gh(`/repos/${s.repo}/contents/${encPath(oldPath)}`, { method: 'DELETE',
+          body: JSON.stringify({ message: 'Move quiz to ' + tName, sha: osha, branch: s.branch }) }, s.token);
+      }
+    }
+    ed.publishedPath = path; saveDraft();
     edMsg('');
-    showPubResult(pagesBase(s.repo) + encPath(path), !!sha);
+    showPubResult(pagesBase(s.repo) + encPath(path), !!sha && !oldPath, tName);
   } catch {
     edMsg("Couldn't reach GitHub. Check the internet connection and try again.", 'bad');
   } finally { btn.disabled = false; }
@@ -819,10 +1008,10 @@ function copyText(text, btn) {
   if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => prompt('Copy this link:', text));
   else prompt('Copy this link:', text);
 }
-function showPubResult(url, updated) {
+function showPubResult(url, updated, tName) {
   const box = $('#ed-pub-result'); box.innerHTML = '';
   const p = document.createElement('div');
-  p.append((updated ? 'Updated! ' : 'Published! ') + 'Share this link with students:', document.createElement('br'));
+  p.append(`${updated ? 'Updated' : 'Published'} in ${tName}'s quizzes. Share this link with students:`, document.createElement('br'));
   const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = url;
   p.appendChild(a);
   const note = document.createElement('div'); note.className = 'msg';
@@ -834,55 +1023,94 @@ function showPubResult(url, updated) {
   box.append(p, note, row); box.classList.remove('hidden');
 }
 
-// List of published quizzes on the start screen
+// ---- Published quizzes on the start screen, grouped by teacher ----
+let pubQuizzes = [];
 async function loadPublishedList() {
   const s = getPub(), list = $('#pub-list'), m = $('#pub-list-msg');
   list.innerHTML = '';
   const locked = !s.repo || !s.token;
   $('#pub-refresh').classList.toggle('hidden', locked);
+  $('#pub-filter-wrap').classList.add('hidden');
   $('#home-pubset').textContent = locked ? 'Enter publishing key' : 'Publishing settings';
   if (locked) { m.textContent = 'Enter the publishing key to see and manage published quizzes.'; return; }
   m.textContent = 'Loading…';
   try {
-    const r = await gh(`/repos/${s.repo}/contents/${encPath(s.folder)}?ref=${encodeURIComponent(s.branch)}`, {}, s.token);
-    if (r.status === 404) { m.textContent = 'Nothing published yet.'; return; }
-    if (!r.ok) { m.textContent = ghError(r); return; }
-    const files = (await r.json()).filter(f => f.type === 'file' && /\.html$/i.test(f.name) && f.name.toLowerCase() !== 'index.html');
-    m.textContent = files.length ? `${files.length} quiz${files.length === 1 ? '' : 'zes'} on ${s.repo}` : 'Nothing published yet.';
-    const base = pagesBase(s.repo);
-    files.forEach(f => {
-      const url = base + encPath(f.path);
-      const li = document.createElement('li');
-      const nm = document.createElement('span'); nm.className = 'nm';
-      nm.textContent = f.name.replace(/\.html$/i, '').replace(/-/g, ' ');
-      const open = document.createElement('a'); open.href = url; open.target = '_blank'; open.rel = 'noopener'; open.textContent = 'Open';
-      const copy = document.createElement('button'); copy.className = 'small'; copy.textContent = 'Copy link';
-      copy.onclick = () => copyText(url, copy);
-      const edit = document.createElement('button'); edit.className = 'small'; edit.textContent = 'Edit';
-      edit.onclick = async () => {
-        edit.disabled = true;
-        try {
-          const rr = await fetch(f.download_url, { cache: 'no-store' });
-          const q = rr.ok ? quizFromHtml(await rr.text()) : null;
-          if (!q) { m.textContent = "Couldn't open that quiz for editing."; return; }
-          q.publishedName = f.name;
-          openEditor(q);
-        } catch { m.textContent = "Couldn't reach GitHub."; }
-        finally { edit.disabled = false; }
-      };
-      const del = document.createElement('button'); del.className = 'small danger'; del.textContent = 'Unpublish';
-      del.onclick = async () => {
-        const cur = getPub();
-        if (!cur.token) return openPubSettings(loadPublishedList);
-        if (!confirm(`Unpublish "${nm.textContent}"? The student link will stop working.`)) return;
-        const rr = await gh(`/repos/${cur.repo}/contents/${encPath(f.path)}`, { method: 'DELETE',
-          body: JSON.stringify({ message: 'Remove quiz: ' + f.name, sha: f.sha, branch: cur.branch }) }, cur.token);
-        if (!rr.ok) { m.textContent = ghError(rr); return; }
-        loadPublishedList();
-      };
-      li.append(nm, open, copy, edit, del); list.appendChild(li);
-    });
-  } catch { m.textContent = "Couldn't reach GitHub to list published quizzes."; }
+    pubQuizzes = await readQuizTree(s);
+    await loadTeachers(s, pubQuizzes);
+    renderFilter();
+    renderPublished();
+  } catch (r) {
+    m.textContent = r instanceof Response ? ghError(r) : "Couldn't reach GitHub to list published quizzes.";
+  }
+}
+function renderFilter() {
+  const sel = $('#pub-filter');
+  const hasUnsorted = pubQuizzes.some(q => !q.teacher);
+  sel.innerHTML = '';
+  sel.append(new Option('All teachers', 'all'));
+  teachers.forEach(t => sel.append(new Option(t.name, t.folder)));
+  if (hasUnsorted) sel.append(new Option('Not sorted yet', '__unsorted'));
+  const valid = v => v && [...sel.options].some(o => o.value === v);
+  const saved = lsGet(FILTER_KEY), mine = lsGet(TEACHER_KEY);
+  sel.value = valid(saved) ? saved : valid(mine) ? mine : 'all';
+  $('#pub-filter-wrap').classList.toggle('hidden', !teachers.length && !hasUnsorted);
+}
+$('#pub-filter').onchange = e => { lsSet(FILTER_KEY, e.target.value); renderPublished(); };
+function renderPublished() {
+  const s = getPub(), list = $('#pub-list'), m = $('#pub-list-msg');
+  list.innerHTML = '';
+  const f = $('#pub-filter').value || 'all';
+  const n = pubQuizzes.length, tn = teachers.length;
+  m.textContent = n ? `${n} quiz${n === 1 ? '' : 'zes'} from ${tn} teacher${tn === 1 ? '' : 's'}` : 'Nothing published yet.';
+  const groups = [...teachers, { name: 'Not sorted yet', folder: '' }]
+    .map(g => ({ ...g, items: pubQuizzes.filter(q => q.teacher === g.folder).sort((a, b) => a.name.localeCompare(b.name)) }))
+    .filter(g => f === 'all' ? g.items.length : g.folder === (f === '__unsorted' ? '' : f));
+  const base = pagesBase(s.repo);
+  groups.forEach(g => {
+    const head = document.createElement('li'); head.className = 'group';
+    const h = document.createElement('h3'); h.textContent = g.name;
+    const c = document.createElement('span'); c.className = 'msg'; c.textContent = `${g.items.length} quiz${g.items.length === 1 ? '' : 'zes'}`;
+    head.append(h, c); list.appendChild(head);
+    if (!g.items.length) {
+      const li = document.createElement('li'); li.className = 'msg';
+      li.textContent = 'No quizzes yet. Pick this name under Teacher when you publish.';
+      list.appendChild(li);
+    }
+    g.items.forEach(q => list.appendChild(quizRow(q, base, s)));
+  });
+}
+function quizRow(q, base, s) {
+  const m = $('#pub-list-msg');
+  const url = base + encPath(q.path);
+  const li = document.createElement('li');
+  const nm = document.createElement('span'); nm.className = 'nm';
+  nm.textContent = q.name.replace(/\.html$/i, '').replace(/-/g, ' ');
+  const open = document.createElement('a'); open.href = url; open.target = '_blank'; open.rel = 'noopener'; open.textContent = 'Open';
+  const copy = document.createElement('button'); copy.className = 'small'; copy.textContent = 'Copy link';
+  copy.onclick = () => copyText(url, copy);
+  const edit = document.createElement('button'); edit.className = 'small'; edit.textContent = 'Edit';
+  edit.onclick = async () => {
+    edit.disabled = true;
+    try {
+      const rr = await gh(`/repos/${s.repo}/contents/${encPath(q.path)}?ref=${encodeURIComponent(s.branch)}`, { accept: 'application/vnd.github.raw' }, s.token);
+      const quiz = rr.ok ? quizFromHtml(await rr.text()) : null;
+      if (!quiz) { m.textContent = "Couldn't open that quiz for editing."; return; }
+      quiz.publishedPath = q.path;
+      quiz.teacher = q.teacher;
+      openEditor(quiz);
+    } catch { m.textContent = "Couldn't reach GitHub."; }
+    finally { edit.disabled = false; }
+  };
+  const del = document.createElement('button'); del.className = 'small danger'; del.textContent = 'Unpublish';
+  del.onclick = async () => {
+    if (!confirm(`Unpublish "${nm.textContent}"? The student link will stop working.`)) return;
+    const rr = await gh(`/repos/${s.repo}/contents/${encPath(q.path)}`, { method: 'DELETE',
+      body: JSON.stringify({ message: 'Remove quiz: ' + q.path, sha: q.sha, branch: s.branch }) }, s.token);
+    if (!rr.ok) { m.textContent = ghError(rr); return; }
+    loadPublishedList();
+  };
+  li.append(nm, open, copy, edit, del);
+  return li;
 }
 $('#pub-refresh').onclick = () => loadPublishedList();
 
