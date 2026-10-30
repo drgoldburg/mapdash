@@ -297,6 +297,7 @@
         <div class="pub-result hidden" id="ed-pub-result"></div>
         <div class="stack">
           <button id="ed-preview">Test it as a student</button>
+          <button id="ed-worksheet">Printable worksheet (PDF)</button>
           <button class="primary" id="ed-publish">Publish</button>
           <button class="small" id="ed-export-html">Download student page (.html)</button>
           <button class="small" id="ed-home">Back to start</button>
@@ -367,6 +368,21 @@
     </div>
   </section>
 </main>
+
+<dialog id="ws-dlg">
+  <form id="ws-form">
+    <div>
+      <h2>Printable worksheet</h2>
+      <p class="msg" style="margin:0">Page 1 is the map with numbers and blanks. Page 2 is the answer key. The numbers are shuffled each time, so you can print different versions.</p>
+    </div>
+    <label class="inline"><input type="checkbox" id="ws-bank"> Include a word bank</label>
+    <p class="msg" style="margin:0">In the print window, choose <b>Save as PDF</b> to download it, or pick a printer.</p>
+    <div class="row">
+      <button type="submit" class="primary">Make worksheet</button>
+      <button type="button" id="ws-cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="pub-dlg">
   <form id="pub-form">
@@ -1113,6 +1129,138 @@ function quizRow(q, base, s) {
   return li;
 }
 $('#pub-refresh').onclick = () => loadPublishedList();
+
+/* ---------------- PRINTABLE WORKSHEET ---------------- */
+// Builds a 2-page printout (worksheet + answer key) inside a hidden frame and opens the print window.
+// Numbers are shuffled every time, so each printout can be a different version.
+const escHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function buildWorksheet(q, withBank, aspect) {
+  const pts = shuffle(q.points);                         // pts[i] is number i + 1
+  const n = pts.length;
+  // Try landscape/portrait pages with the blanks beside or below the map; keep whichever gives the biggest map.
+  const colWOf = c => c === 1 ? 2.9 : c === 2 ? 2.2 : 1.85;
+  const bankChars = withBank ? q.points.reduce((t, p) => t + p.name.length + 5, 11) : 0;
+  let best = null;
+  for (const landscape of [true, false]) {
+    const W = landscape ? 10 : 7.5, H = landscape ? 7.4 : 9.9;
+    const bankH = withBank ? 0.36 + Math.ceil(bankChars * 0.075 / (W - 0.3)) * 0.18 : 0;
+    const H0 = H - 0.62 - bankH;
+    for (const side of [true, false]) {
+      let cols, rows, rowH, mapW, mapH;
+      if (side) {
+        cols = Math.min(3, Math.ceil(n / Math.floor(H0 / 0.34))); rows = Math.ceil(n / cols);
+        rowH = Math.min(0.34, H0 / rows);
+        mapW = W - (cols * colWOf(cols) + (cols - 1) * 0.22) - 0.28; mapH = H0;
+      } else {
+        cols = n <= 6 ? 2 : W >= 9 ? 4 : 3; rows = Math.ceil(n / cols);
+        rowH = Math.min(0.34, H0 * 0.45 / rows);
+        mapW = W; mapH = H0 - rows * rowH - 0.28;
+      }
+      const w = Math.min(mapW, mapH * aspect), area = w * (w / aspect);
+      if (!best || area > best.area) best = { landscape, side, cols, rows, rowH, area };
+    }
+  }
+  const { landscape, side, cols, rows, rowH } = best;
+  const colW = colWOf(cols);
+  const font = rowH < 0.24 ? 8.5 : rowH < 0.3 ? 9.5 : 11;
+  const marker = n > 40 ? 0.19 : n > 20 ? 0.22 : 0.26;
+  const markers = pts.map((p, i) =>
+    `<div class="n" style="left:${(p.x * 100).toFixed(3)}%;top:${(p.y * 100).toFixed(3)}%">${i + 1}</div>`).join('');
+  const map = `<div class="maparea"><div class="stage"><img src="${q.image}" alt=""><div class="layer">${markers}</div></div></div>`;
+  const grid = `grid-template-rows:repeat(${rows},${rowH}in);grid-template-columns:repeat(${cols},${side ? colW + 'in' : '1fr'});font-size:${font}pt`;
+  const blanks = pts.map((p, i) => `<div><b>${i + 1}.</b><span class="line"></span></div>`).join('');
+  const answers = pts.map((p, i) => `<div><b>${i + 1}.</b><span class="ans">${escHtml(p.name)}</span></div>`).join('');
+  const bank = withBank
+    ? `<div class="bank"><strong>Word bank</strong>${q.points.map(p => p.name).sort((a, b) => a.localeCompare(b)).map(nm => `<span>${escHtml(nm)}</span>`).join('')}</div>` : '';
+  const title = escHtml(q.title);
+  const page = (head, extra, list) => `
+<section class="page ${side ? 'side' : 'below'}">
+  <header>${head}</header>${extra}
+  <div class="body">${map}<div class="answers" style="${grid}">${list}</div></div>
+</section>`;
+  const W = landscape ? 10 : 7.5, H = landscape ? 7.5 : 10;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${title} worksheet</title><style>
+@page{size:letter ${landscape ? 'landscape' : 'portrait'};margin:.5in}
+*{box-sizing:border-box}
+html,body{margin:0;background:#fff}
+body{font-family:Arial,Helvetica,sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.page{width:${W}in;height:${H - 0.1}in;display:flex;flex-direction:column;overflow:hidden;break-after:page;page-break-after:always}
+.page:last-child{break-after:auto;page-break-after:auto}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:.3in;border-bottom:2px solid #000;padding-bottom:.08in;margin-bottom:.14in}
+h1{font-size:19pt;margin:0;line-height:1.1}
+.who{font-size:11pt;white-space:nowrap}
+.who span{display:inline-block;border-bottom:1px solid #000;width:2.1in;margin:0 .12in 0 4px}
+.who span.short{width:1.1in;margin-right:0}
+.key{font-size:11pt;font-weight:bold;border:1.5px solid #000;border-radius:4px;padding:2px 8px;white-space:nowrap}
+.body{flex:1;min-height:0;display:flex;gap:.28in}
+.below .body{flex-direction:column}
+.below .maparea{justify-content:center}
+.maparea{flex:1;min-height:0;min-width:0;display:flex;align-items:flex-start;justify-content:center}
+.stage{position:relative;display:inline-block;line-height:0;outline:1.5px solid #000}
+.stage img{display:block}
+.layer{position:absolute;inset:0}
+.n{position:absolute;transform:translate(-50%,-50%);width:${marker}in;height:${marker}in;border-radius:50%;background:#fff;border:1.5px solid #000;
+   font:bold ${marker > 0.22 ? 10 : 8.5}pt/1 Arial,Helvetica,sans-serif;display:flex;align-items:center;justify-content:center}
+.answers{display:grid;grid-auto-flow:column;column-gap:.22in;align-content:start;flex-shrink:0}
+.answers div{display:flex;align-items:flex-end;gap:5px;padding-bottom:3px;min-width:0}
+.answers b{min-width:1.6em;text-align:right}
+.answers .line{flex:1;border-bottom:1px solid #000;height:1.1em}
+.answers .ans{flex:1;border-bottom:1px solid #bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bank{border:1.5px solid #000;border-radius:5px;padding:.05in .12in;font-size:10pt;margin-bottom:.12in;line-height:1.6}
+.bank strong{margin-right:.15in}
+.bank span{display:inline-block;margin-right:.22in}
+</style></head><body>
+${page(`<h1>${title}</h1><div class="who">Name<span></span>Date<span class="short"></span></div>`, bank, blanks)}
+${page(`<h1>${title}</h1><div class="key">Answer key</div>`, '', answers)}
+<script>
+(async () => {
+  const imgs = [...document.images];
+  await Promise.all(imgs.map(i => i.decode().catch(() => {})));
+  document.querySelectorAll('.maparea').forEach(a => {
+    const img = a.querySelector('img'), r = img.naturalWidth / img.naturalHeight;
+    let w = a.clientWidth - 2, h = a.clientHeight - 2;
+    if (w / h > r) w = h * r; else h = w / r;
+    img.style.width = w + 'px'; img.style.height = h + 'px';
+    if (a.closest('.below')) { a.style.flex = 'none'; a.style.height = (h + 2) + 'px'; }
+  });
+  window.worksheetReady = true;
+  addEventListener('afterprint', () => parent.postMessage('worksheet-done', '*'));
+  if (!window.NO_PRINT) setTimeout(() => print(), 60);
+})();
+<\/script></body></html>`;
+}
+let titleBeforePrint = null;
+function printWorksheet(q, withBank) {
+  const img = new Image();
+  img.onload = () => {
+    const html = buildWorksheet(q, withBank, img.naturalWidth / img.naturalHeight);
+    const old = $('#print-frame'); if (old) old.remove();
+    const f = document.createElement('iframe');
+    f.id = 'print-frame'; f.title = 'Printable worksheet';
+    f.style.cssText = 'position:fixed;left:0;top:0;width:11in;height:11in;border:0;opacity:0;pointer-events:none;z-index:-1';
+    if (titleBeforePrint === null) titleBeforePrint = document.title;
+    document.title = q.title + ' worksheet';      // becomes the suggested PDF file name
+    f.srcdoc = html;
+    document.body.appendChild(f);
+    edMsg('Opening the print window. Choose "Save as PDF" to download it.', 'good');
+  };
+  img.onerror = () => edMsg("Couldn't read the map image.", 'bad');
+  img.src = q.image;
+}
+window.addEventListener('message', e => {
+  if (e.data === 'worksheet-done' && titleBeforePrint !== null) { document.title = titleBeforePrint; titleBeforePrint = null; }
+});
+$('#ed-worksheet').onclick = () => {
+  if (pop) closePopover(true);
+  const err = validate(); if (err) return edMsg(err, 'bad');
+  $('#ws-dlg').showModal();
+};
+$('#ws-cancel').onclick = () => $('#ws-dlg').close();
+$('#ws-form').onsubmit = e => {
+  e.preventDefault();
+  $('#ws-dlg').close();
+  printWorksheet(cleanQuiz(), $('#ws-bank').checked);
+};
 
 /* ---------------- SETUP / PLAYER ---------------- */
 let currentQuiz = null, setupCtx = {}, game = null, timerId = null;
