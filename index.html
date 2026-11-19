@@ -165,6 +165,9 @@
   .setup-text .count{font-size:19px;color:var(--ink-soft);margin:0 0 20px}
   .check{display:flex;gap:10px;align-items:center;margin:10px 0;font-size:16px;cursor:pointer}
   .setup-text .go{margin:26px 0 14px}
+  .setup-text .go.pick{display:flex;gap:14px;flex-wrap:wrap}
+  .go.pick button.big{font-size:24px;padding:8px 22px 10px;text-align:left;line-height:1.1}
+  .go.pick button small{display:block;font-family:var(--body);font-size:14px;font-weight:600;margin-top:3px}
 
   /* Results (students) */
   .results{max-width:760px;margin:20px auto;padding:30px}
@@ -297,8 +300,9 @@
         <label>Dot size <input type="range" id="ed-dotsize" min="8" max="30" step="1"></label>
         <fieldset class="opts">
           <legend>Quiz type</legend>
-          <label class="check"><input type="radio" name="ed-mode" value="click" id="ed-mode-click"> <span>Click the place<small>Students see a name and click its dot.</small></span></label>
-          <label class="check"><input type="radio" name="ed-mode" value="type" id="ed-mode-type"> <span>Type the name<small>Students click a dot and type what it is.</small></span></label>
+          <label class="check"><input type="radio" name="ed-mode" value="click" id="ed-mode-click"> <span>Find the places<small>Students see a name and click its dot.</small></span></label>
+          <label class="check"><input type="radio" name="ed-mode" value="type" id="ed-mode-type"> <span>Name the places<small>Students click a dot and type its name.</small></span></label>
+          <label class="check"><input type="radio" name="ed-mode" value="choice" id="ed-mode-choice"> <span>Students choose<small>Students pick either way on the start screen.</small></span></label>
         </fieldset>
         <fieldset class="opts">
           <legend>When students play</legend>
@@ -339,7 +343,11 @@
       <div class="setup-text">
         <h1 id="su-title"></h1>
         <p class="count" id="su-count"></p>
-        <div class="go"><button class="primary big" id="su-start">Start quiz</button></div>
+        <div class="go" id="su-go-one"><button class="primary big" id="su-start">Start quiz</button></div>
+        <div class="go pick" id="su-go-choice">
+          <button class="primary big" id="su-find">Find the places<small>See a name, click its dot</small></button>
+          <button class="big" id="su-name">Name the places<small>Click a dot, type its name</small></button>
+        </div>
         <button class="small teacher-only" id="su-back">Back</button>
       </div>
     </div>
@@ -391,6 +399,7 @@
       <div class="row">
         <button class="primary" id="rs-practice">Practice my misses</button>
         <button id="rs-again">Play again</button>
+        <button id="rs-other">Try the other way</button>
         <button id="rs-back">Back to start</button>
       </div>
     </div>
@@ -495,7 +504,7 @@ function normalize(raw) {
     dotSize: isFinite(raw.dotSize) ? clamp(+raw.dotSize, 8, 30) : 16,
     shuffle: raw.shuffle !== false,
     showNames: raw.showNames === true,
-    mode: raw.mode === 'type' ? 'type' : 'click',
+    mode: ['type', 'choice'].includes(raw.mode) ? raw.mode : 'click',
     fuzzy: raw.fuzzy !== false,
     points,
     publishedPath: typeof raw.publishedPath === 'string' ? raw.publishedPath
@@ -1315,7 +1324,11 @@ function startSetup(q, ctx) {
   const np = q.points.length, s = np === 1 ? '' : 's';
   $('#su-count').textContent = q.mode === 'type'
     ? `Name ${np} place${s} on the map. Click a dot and type its name. You get three tries at each one.`
+    : q.mode === 'choice'
+    ? `There are ${np} place${s} on this map. Pick how you want to play. You get three tries at each one.`
     : `Find ${np} place${s} on the map. You get three tries at each one.`;
+  $('#su-go-one').classList.toggle('hidden', q.mode === 'choice');
+  $('#su-go-choice').classList.toggle('hidden', q.mode !== 'choice');
   $('#su-map').src = q.image;
   $('#su-back').textContent = setupCtx.from === 'editor' ? 'Back to editor' : 'Back';
   $('#top-sub').textContent = lockedPlay ? '' : 'Quiz maker for teachers';
@@ -1324,9 +1337,12 @@ function startSetup(q, ctx) {
 }
 $('#su-back').onclick = () => setupCtx.from === 'editor' ? (show('editor'), renderEditor()) : showHome();
 $('#su-start').onclick = () => startGame(null);
+$('#su-find').onclick = () => startGame(null, 'click');
+$('#su-name').onclick = () => startGame(null, 'type');
 
-function startGame(onlyIds) {
+function startGame(onlyIds, playMode) {
   const q = currentQuiz;
+  const mode = playMode || (q.mode === 'type' ? 'type' : 'click');
   const pool = onlyIds ? q.points.filter(p => onlyIds.includes(p.id)) : q.points.slice();
   const order = q.shuffle ? shuffle(pool) : pool;
   game = {
@@ -1334,14 +1350,14 @@ function startGame(onlyIds) {
     byId: Object.fromEntries(q.points.map(p => [p.id, p])),
     total: order.length, current: null, tries: {}, wrong: {}, done: new Set(),
     firstTry: 0, answered: 0, start: Date.now(), labels: q.showNames, onlyIds,
-    mode: q.mode, fuzzy: q.fuzzy, close: {}, pool
+    mode, fuzzy: q.fuzzy, close: {}, pool
   };
   closeAnswer();
-  $('#pl-skip').classList.toggle('hidden', q.mode === 'type');
+  $('#pl-skip').classList.toggle('hidden', mode === 'type');
   $('#pl-img').src = q.image;
   plStage.style.setProperty('--d', q.dotSize + 'px');
   plLayer.innerHTML = '';
-  (q.mode === 'type' ? pool : q.points).forEach(p => {
+  (mode === 'type' ? pool : q.points).forEach(p => {
     const b = document.createElement('button');
     b.className = 'dot'; b.type = 'button'; b.dataset.id = p.id;
     b.style.left = p.x * 100 + '%'; b.style.top = p.y * 100 + '%';
@@ -1352,7 +1368,7 @@ function startGame(onlyIds) {
   timerId = setInterval(() => { $('#pl-time').textContent = fmtTime(Date.now() - game.start); }, 500);
   $('#pl-time').textContent = '00:00';
   show('player');
-  if (q.mode === 'type') {
+  if (mode === 'type') {
     game.current = 'type';
     $('#pl-lead').textContent = 'Click a dot and';
     const tg = $('#pl-target'); tg.textContent = 'type its name';
@@ -1572,8 +1588,12 @@ function finish() {
   }
   $('#rs-practice').classList.toggle('hidden', !misses.length);
   $('#rs-again').classList.toggle('primary', !misses.length);
-  $('#rs-practice').onclick = () => startGame(misses);
-  $('#rs-again').onclick = () => startGame(game.onlyIds);
+  const played = game.mode, other = played === 'type' ? 'click' : 'type';
+  $('#rs-practice').onclick = () => startGame(misses, played);
+  $('#rs-again').onclick = () => startGame(game.onlyIds, played);
+  $('#rs-other').classList.toggle('hidden', currentQuiz.mode !== 'choice');
+  $('#rs-other').textContent = other === 'type' ? 'Now try naming them' : 'Now try finding them';
+  $('#rs-other').onclick = () => startGame(null, other);
   $('#rs-again').textContent = game.onlyIds ? 'Practice these again' : 'Play again';
   show('results');
 }
