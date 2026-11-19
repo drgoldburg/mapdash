@@ -111,6 +111,12 @@
   .opts{border:2px solid var(--ink);border-radius:12px;padding:8px 12px 10px;margin:0;display:flex;flex-direction:column;gap:8px}
   .opts legend{font-weight:600;font-size:14px;padding:0 4px}
   .opts label.check{align-items:flex-start}
+  textarea{font:inherit;padding:8px 10px;border:2px solid var(--ink);border-radius:10px;width:100%;background:#fff;color:var(--ink);resize:vertical;min-height:2.6em}
+  textarea:focus-visible{outline:3px solid var(--sea);outline-offset:2px}
+  .fieldhint{font-weight:400;font-size:12.5px;color:var(--ink-soft);line-height:1.3}
+  .setup-text .instr{font-size:21px;font-weight:700;margin:0 0 8px;color:var(--ink)}
+  .target.long{font-size:25px}
+  .target.longer{font-size:20px;white-space:normal;max-width:34ch;text-align:center}
   .opts small{display:block;color:var(--ink-soft);font-size:12.5px;line-height:1.3}
   input[type=radio]{width:18px;height:18px;accent-color:var(--ink);margin:1px 0 0;flex-shrink:0}
   #editor[data-mode=type] .click-only, #editor[data-mode=click] .type-only{display:none !important}
@@ -297,6 +303,10 @@
       </div>
       <aside class="side card">
         <label>Quiz title<input id="ed-title" maxlength="100"></label>
+        <label>Instructions for students
+          <textarea id="ed-instr" rows="2" maxlength="120" placeholder="Example: Type in the NFL teams"></textarea>
+          <small class="fieldhint">Shown on the start screen and as the big prompt while students name the places.</small>
+        </label>
         <label>Dot size <input type="range" id="ed-dotsize" min="8" max="30" step="1"></label>
         <fieldset class="opts">
           <legend>Quiz type</legend>
@@ -342,6 +352,7 @@
       <div class="postcard"><img id="su-map" alt="The map for this quiz"></div>
       <div class="setup-text">
         <h1 id="su-title"></h1>
+        <p class="instr hidden" id="su-instr"></p>
         <p class="count" id="su-count"></p>
         <div class="go" id="su-go-one"><button class="primary big" id="su-start">Start quiz</button></div>
         <div class="go pick" id="su-go-choice">
@@ -504,6 +515,7 @@ function normalize(raw) {
     dotSize: isFinite(raw.dotSize) ? clamp(+raw.dotSize, 8, 30) : 16,
     shuffle: raw.shuffle !== false,
     showNames: raw.showNames === true,
+    instructions: typeof raw.instructions === 'string' ? raw.instructions.slice(0, 120) : '',
     mode: ['type', 'choice'].includes(raw.mode) ? raw.mode : 'click',
     fuzzy: raw.fuzzy !== false,
     points,
@@ -567,6 +579,7 @@ function renderEditor() {
   $('#ed-shuffle').checked = ed.shuffle;
   $('#ed-shownames').checked = ed.showNames;
   $('#ed-fuzzy').checked = ed.fuzzy;
+  $('#ed-instr').value = ed.instructions;
   $('#ed-mode-' + ed.mode).checked = true;
   $('#editor').dataset.mode = ed.mode;
   edStage.style.setProperty('--d', ed.dotSize + 'px');
@@ -697,6 +710,7 @@ $('#ed-title').oninput = e => { ed.title = e.target.value; document.title = (ed.
 $('#ed-shuffle').onchange = e => { ed.shuffle = e.target.checked; saveDraft(); };
 $('#ed-shownames').onchange = e => { ed.showNames = e.target.checked; saveDraft(); };
 $('#ed-fuzzy').onchange = e => { ed.fuzzy = e.target.checked; saveDraft(); };
+$('#ed-instr').oninput = e => { ed.instructions = e.target.value; saveDraftSoon(); };
 document.querySelectorAll('input[name=ed-mode]').forEach(r => r.onchange = () => {
   ed.mode = r.value; $('#editor').dataset.mode = ed.mode; saveDraft();
 });
@@ -771,7 +785,7 @@ function validate() {
   return null;
 }
 function cleanQuiz() {
-  return { version: 1, title: ed.title.trim() || 'Map quiz', image: ed.image, dotSize: ed.dotSize, shuffle: ed.shuffle, showNames: ed.showNames, mode: ed.mode, fuzzy: ed.fuzzy,
+  return { version: 1, title: ed.title.trim() || 'Map quiz', image: ed.image, dotSize: ed.dotSize, shuffle: ed.shuffle, showNames: ed.showNames, mode: ed.mode, fuzzy: ed.fuzzy, instructions: ed.instructions.trim().replace(/\s+/g, ' '),
            points: ed.points.map(p => ({ id: p.id, name: p.name.trim(), x: +p.x.toFixed(5), y: +p.y.toFixed(5) })) };
 }
 $('#ed-preview').onclick = () => {
@@ -1196,7 +1210,7 @@ function buildWorksheet(q, withBank, aspect) {
   for (const landscape of [true, false]) {
     const W = landscape ? 10 : 7.5, H = landscape ? 7.4 : 9.9;
     const bankH = withBank ? 0.36 + Math.ceil(bankChars * 0.075 / (W - 0.3)) * 0.18 : 0;
-    const H0 = H - 0.62 - bankH;
+    const H0 = H - 0.62 - bankH - (q.instructions ? 0.32 : 0);
     for (const side of [true, false]) {
       let cols, rows, rowH, mapW, mapH;
       if (side) {
@@ -1260,9 +1274,10 @@ h1{font-size:19pt;margin:0;line-height:1.1}
 .answers .ans{flex:1;border-bottom:1px solid #bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bank{border:1.5px solid #000;border-radius:5px;padding:.05in .12in;font-size:10pt;margin-bottom:.12in;line-height:1.6}
 .bank strong{margin-right:.15in}
+.wsinstr{font-size:12pt;font-weight:bold;margin:0 0 .1in}
 .bank span{display:inline-block;margin-right:.22in}
 </style></head><body>
-${page(`<h1>${title}</h1><div class="who">Name<span></span>Date<span class="short"></span></div>`, bank, blanks)}
+${page(`<h1>${title}</h1><div class="who">Name<span></span>Date<span class="short"></span></div>`, (q.instructions ? `<p class="wsinstr">${escHtml(q.instructions)}</p>` : '') + bank, blanks)}
 ${page(`<h1>${title}</h1><div class="key">Answer key</div>`, '', answers)}
 <script>
 (async () => {
@@ -1327,6 +1342,8 @@ function startSetup(q, ctx) {
     : q.mode === 'choice'
     ? `There are ${np} place${s} on this map. Pick how you want to play. You get three tries at each one.`
     : `Find ${np} place${s} on the map. You get three tries at each one.`;
+  $('#su-instr').textContent = q.instructions || '';
+  $('#su-instr').classList.toggle('hidden', !q.instructions);
   $('#su-go-one').classList.toggle('hidden', q.mode === 'choice');
   $('#su-go-choice').classList.toggle('hidden', q.mode !== 'choice');
   $('#su-map').src = q.image;
@@ -1370,13 +1387,19 @@ function startGame(onlyIds, playMode) {
   show('player');
   if (mode === 'type') {
     game.current = 'type';
-    $('#pl-lead').textContent = 'Click a dot and';
-    const tg = $('#pl-target'); tg.textContent = 'type its name';
+    $('#pl-lead').textContent = '';
+    $('#pl-lead').classList.add('hidden');
+    const tg = $('#pl-target'), text = q.instructions || 'Name each place';
+    tg.textContent = text;
+    tg.classList.toggle('long', text.length > 24 && text.length <= 40);
+    tg.classList.toggle('longer', text.length > 40);
     tg.classList.remove('pop'); void tg.offsetWidth; tg.classList.add('pop');
-    tip.classList.add('hidden');
+    tip.textContent = 'Click a dot to answer';
     updateBar();
   } else {
     $('#pl-lead').textContent = 'Click on';
+    $('#pl-lead').classList.remove('hidden');
+    $('#pl-target').classList.remove('long', 'longer');
     next();
   }
 }
@@ -1437,7 +1460,8 @@ $('#pl-quit').onclick = () => {
   clearInterval(timerId); closeAnswer(); game = null; show('setup');
 };
 plStage.addEventListener('pointermove', e => {
-  if (!game || !game.current || game.mode === 'type') return;
+  if (!game || !game.current) return;
+  if (game.mode === 'type' && (ansFor || e.target.closest('.popover'))) { tip.classList.add('hidden'); return; }
   const r = plStage.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
   tip.classList.remove('hidden');
@@ -1492,6 +1516,7 @@ function onTypeDot(id, btn) {
   if (game.done.has(id)) { showTag(btn, game.byId[id].name, 'info above', 1200); return; }
   closeAnswer();
   ansFor = id;
+  tip.classList.add('hidden');
   const p = game.byId[id];
   btn.classList.add('selected');
   ansBox.style.left = p.x * 100 + '%'; ansBox.style.top = p.y * 100 + '%';
