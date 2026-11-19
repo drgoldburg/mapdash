@@ -110,6 +110,17 @@
   .side label.check{flex-direction:row;align-items:center;gap:8px;font-weight:400;margin:0;font-size:14px}
   .opts{border:2px solid var(--ink);border-radius:12px;padding:8px 12px 10px;margin:0;display:flex;flex-direction:column;gap:8px}
   .opts legend{font-weight:600;font-size:14px;padding:0 4px}
+  .opts label.check{align-items:flex-start}
+  .opts small{display:block;color:var(--ink-soft);font-size:12.5px;line-height:1.3}
+  input[type=radio]{width:18px;height:18px;accent-color:var(--ink);margin:1px 0 0;flex-shrink:0}
+  #editor[data-mode=type] .click-only, #editor[data-mode=click] .type-only{display:none !important}
+  .popover.answer{width:260px;z-index:6}
+  .popover.answer .row{align-items:center;margin-top:8px}
+  .popover.answer .msg{font-size:13px;line-height:1.25;flex:1}
+  .popover.answer.shake{animation:boxshake .3s}
+  @keyframes boxshake{25%{margin-left:-6px}75%{margin-left:6px}}
+  .dot.selected{background:var(--sun)}
+  .tag.above{top:auto;bottom:100%;transform:translate(-50%,-6px);z-index:2}
   .side h3{margin:4px 0 0;font-size:20px}
   #ed-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
   #ed-list li{display:flex;align-items:center;gap:6px}
@@ -285,9 +296,15 @@
         <label>Quiz title<input id="ed-title" maxlength="100"></label>
         <label>Dot size <input type="range" id="ed-dotsize" min="8" max="30" step="1"></label>
         <fieldset class="opts">
+          <legend>Quiz type</legend>
+          <label class="check"><input type="radio" name="ed-mode" value="click" id="ed-mode-click"> <span>Click the place<small>Students see a name and click its dot.</small></span></label>
+          <label class="check"><input type="radio" name="ed-mode" value="type" id="ed-mode-type"> <span>Type the name<small>Students click a dot and type what it is.</small></span></label>
+        </fieldset>
+        <fieldset class="opts">
           <legend>When students play</legend>
-          <label class="check"><input type="checkbox" id="ed-shuffle"> Mix up the order</label>
-          <label class="check"><input type="checkbox" id="ed-shownames"> Show names on the map after they're found</label>
+          <label class="check click-only"><input type="checkbox" id="ed-shuffle"> Mix up the order</label>
+          <label class="check click-only"><input type="checkbox" id="ed-shownames"> Show names on the map after they're found</label>
+          <label class="check type-only"><input type="checkbox" id="ed-fuzzy"> Accept close spellings</label>
         </fieldset>
         <div class="row"><button class="small" id="ed-replace">Replace map image</button></div>
         <h3>Places (<span id="ed-count">0</span>)</h3>
@@ -337,7 +354,7 @@
           <span id="pl-progress">0 of 0</span>
           <span class="scorechip" id="pl-score" title="Found on the first try">—</span>
         </div>
-        <div class="prompt">Click on <span class="target" id="pl-target"></span></div>
+        <div class="prompt"><span id="pl-lead">Click on</span> <span class="target" id="pl-target"></span></div>
         <div class="right">
           <span class="clock" id="pl-time">00:00</span>
           <button class="small" id="pl-skip" title="Skip for now. It comes back at the end.">Skip</button>
@@ -350,6 +367,10 @@
             <img id="pl-img" alt="Quiz map" draggable="false">
             <div class="layer" id="pl-layer"></div>
             <div class="cursor-tip hidden" id="pl-tip"></div>
+            <form class="popover answer hidden" id="pl-ans" autocomplete="off">
+              <input id="pl-ans-input" placeholder="Type the name" maxlength="80" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Name of this place">
+              <div class="row"><button class="small primary" type="submit">Check</button><span class="msg" id="pl-ans-msg"></span></div>
+            </form>
           </div>
         </div>
       </div>
@@ -474,6 +495,8 @@ function normalize(raw) {
     dotSize: isFinite(raw.dotSize) ? clamp(+raw.dotSize, 8, 30) : 16,
     shuffle: raw.shuffle !== false,
     showNames: raw.showNames === true,
+    mode: raw.mode === 'type' ? 'type' : 'click',
+    fuzzy: raw.fuzzy !== false,
     points,
     publishedPath: typeof raw.publishedPath === 'string' ? raw.publishedPath
       : typeof raw.publishedName === 'string' ? 'quizzes/' + raw.publishedName : null,
@@ -534,6 +557,9 @@ function renderEditor() {
   $('#ed-dotsize').value = ed.dotSize;
   $('#ed-shuffle').checked = ed.shuffle;
   $('#ed-shownames').checked = ed.showNames;
+  $('#ed-fuzzy').checked = ed.fuzzy;
+  $('#ed-mode-' + ed.mode).checked = true;
+  $('#editor').dataset.mode = ed.mode;
   edStage.style.setProperty('--d', ed.dotSize + 'px');
   const has = !!ed.image;
   $('#ed-drop').classList.toggle('hidden', has);
@@ -661,6 +687,10 @@ $('#ed-pop-del').onclick = () => { if (pop) removePoint(pop.id); };
 $('#ed-title').oninput = e => { ed.title = e.target.value; document.title = (ed.title || 'Quiz') + ' · Editing'; saveDraftSoon(); };
 $('#ed-shuffle').onchange = e => { ed.shuffle = e.target.checked; saveDraft(); };
 $('#ed-shownames').onchange = e => { ed.showNames = e.target.checked; saveDraft(); };
+$('#ed-fuzzy').onchange = e => { ed.fuzzy = e.target.checked; saveDraft(); };
+document.querySelectorAll('input[name=ed-mode]').forEach(r => r.onchange = () => {
+  ed.mode = r.value; $('#editor').dataset.mode = ed.mode; saveDraft();
+});
 $('#ed-dotsize').oninput = e => { ed.dotSize = +e.target.value; edStage.style.setProperty('--d', ed.dotSize + 'px'); if (pop) positionPopover(findPt(pop.id)); saveDraftSoon(); };
 
 // Map image: choose, drop, or paste
@@ -732,7 +762,7 @@ function validate() {
   return null;
 }
 function cleanQuiz() {
-  return { version: 1, title: ed.title.trim() || 'Map quiz', image: ed.image, dotSize: ed.dotSize, shuffle: ed.shuffle, showNames: ed.showNames,
+  return { version: 1, title: ed.title.trim() || 'Map quiz', image: ed.image, dotSize: ed.dotSize, shuffle: ed.shuffle, showNames: ed.showNames, mode: ed.mode, fuzzy: ed.fuzzy,
            points: ed.points.map(p => ({ id: p.id, name: p.name.trim(), x: +p.x.toFixed(5), y: +p.y.toFixed(5) })) };
 }
 $('#ed-preview').onclick = () => {
@@ -1282,7 +1312,10 @@ const plStage = $('#pl-stage'), plLayer = $('#pl-layer'), tip = $('#pl-tip');
 function startSetup(q, ctx) {
   currentQuiz = q; setupCtx = ctx || {};
   $('#su-title').textContent = q.title;
-  $('#su-count').textContent = `Find ${q.points.length} place${q.points.length === 1 ? '' : 's'} on the map. You get three tries at each one.`;
+  const np = q.points.length, s = np === 1 ? '' : 's';
+  $('#su-count').textContent = q.mode === 'type'
+    ? `Name ${np} place${s} on the map. Click a dot and type its name. You get three tries at each one.`
+    : `Find ${np} place${s} on the map. You get three tries at each one.`;
   $('#su-map').src = q.image;
   $('#su-back').textContent = setupCtx.from === 'editor' ? 'Back to editor' : 'Back';
   $('#top-sub').textContent = lockedPlay ? '' : 'Quiz maker for teachers';
@@ -1300,12 +1333,15 @@ function startGame(onlyIds) {
     queue: order.map(p => p.id), order: order.map(p => p.id),
     byId: Object.fromEntries(q.points.map(p => [p.id, p])),
     total: order.length, current: null, tries: {}, wrong: {}, done: new Set(),
-    firstTry: 0, answered: 0, start: Date.now(), labels: q.showNames, onlyIds
+    firstTry: 0, answered: 0, start: Date.now(), labels: q.showNames, onlyIds,
+    mode: q.mode, fuzzy: q.fuzzy, close: {}, pool
   };
+  closeAnswer();
+  $('#pl-skip').classList.toggle('hidden', q.mode === 'type');
   $('#pl-img').src = q.image;
   plStage.style.setProperty('--d', q.dotSize + 'px');
   plLayer.innerHTML = '';
-  q.points.forEach(p => {
+  (q.mode === 'type' ? pool : q.points).forEach(p => {
     const b = document.createElement('button');
     b.className = 'dot'; b.type = 'button'; b.dataset.id = p.id;
     b.style.left = p.x * 100 + '%'; b.style.top = p.y * 100 + '%';
@@ -1316,7 +1352,17 @@ function startGame(onlyIds) {
   timerId = setInterval(() => { $('#pl-time').textContent = fmtTime(Date.now() - game.start); }, 500);
   $('#pl-time').textContent = '00:00';
   show('player');
-  next();
+  if (q.mode === 'type') {
+    game.current = 'type';
+    $('#pl-lead').textContent = 'Click a dot and';
+    const tg = $('#pl-target'); tg.textContent = 'type its name';
+    tg.classList.remove('pop'); void tg.offsetWidth; tg.classList.add('pop');
+    tip.classList.add('hidden');
+    updateBar();
+  } else {
+    $('#pl-lead').textContent = 'Click on';
+    next();
+  }
 }
 function dotEl(id) { return plLayer.querySelector(`[data-id="${id}"]`); }
 function next() {
@@ -1344,6 +1390,7 @@ function showTag(btn, text, kind, ms) {
 }
 function onDot(id, btn) {
   if (!game || !game.current) return;
+  if (game.mode === 'type') return onTypeDot(id, btn);
   const name = game.byId[id].name;
   if (game.done.has(id)) { if (!game.labels) showTag(btn, name, 'info', 1200); return; }
   const cur = game.current;
@@ -1371,10 +1418,10 @@ $('#pl-skip').onclick = () => {
 };
 $('#pl-quit').onclick = () => {
   if (game && game.answered < game.total && !confirm('Quit this quiz? Your progress will be lost.')) return;
-  clearInterval(timerId); game = null; show('setup');
+  clearInterval(timerId); closeAnswer(); game = null; show('setup');
 };
 plStage.addEventListener('pointermove', e => {
-  if (!game || !game.current) return;
+  if (!game || !game.current || game.mode === 'type') return;
   const r = plStage.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
   tip.classList.remove('hidden');
@@ -1384,6 +1431,107 @@ plStage.addEventListener('pointermove', e => {
 });
 plStage.addEventListener('pointerleave', () => tip.classList.add('hidden'));
 
+/* ----- Type-the-name mode ----- */
+// Compare answers loosely: ignore case, accents, punctuation, spaces, a leading "the", and St./Mt. abbreviations.
+function normName(s) {
+  return ' ' + s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ') + ' ';
+}
+function compact(s) {
+  return normName(s).replace(/ st /g, ' saint ').replace(/ ste /g, ' sainte ').replace(/ mt /g, ' mount ').replace(/ ft /g, ' fort ')
+    .replace(/^ the /, ' ').replace(/ /g, '');
+}
+// Edit distance where a swapped pair of letters counts as one typo.
+function lev(a, b) {
+  if (a === b) return 0;
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++) {
+      const c = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  return d[a.length][b.length];
+}
+const typoAllowance = n => n <= 3 ? 0 : n <= 5 ? 1 : n <= 10 ? 2 : 3;
+function gradeAnswer(typed, p, all, fuzzy) {
+  const t = compact(typed), goal = compact(p.name);
+  if (!t) return 'empty';
+  if (t === goal) return 'exact';
+  if (!fuzzy) return 'wrong';
+  const d = lev(t, goal);
+  if (d > typoAllowance(goal.length)) return 'wrong';
+  // A close spelling of a different place in this quiz doesn't count.
+  if (all.some(o => o !== p && lev(t, compact(o.name)) < d)) return 'wrong';
+  return 'close';
+}
+let ansFor = null;
+const ansBox = $('#pl-ans'), ansInput = $('#pl-ans-input'), ansMsg = $('#pl-ans-msg');
+function closeAnswer() {
+  ansFor = null; ansBox.classList.add('hidden');
+  plLayer.querySelectorAll('.dot.selected').forEach(d => d.classList.remove('selected'));
+}
+function onTypeDot(id, btn) {
+  if (game.done.has(id)) { showTag(btn, game.byId[id].name, 'info above', 1200); return; }
+  closeAnswer();
+  ansFor = id;
+  const p = game.byId[id];
+  btn.classList.add('selected');
+  ansBox.style.left = p.x * 100 + '%'; ansBox.style.top = p.y * 100 + '%';
+  const tx = p.x < 0.2 ? '-10%' : p.x > 0.8 ? '-90%' : '-50%';
+  const off = currentQuiz.dotSize / 2 + 10;
+  ansBox.style.transform = `translate(${tx}, ${p.y > 0.72 ? `calc(-100% - ${off}px)` : off + 'px'})`;
+  ansInput.value = '';
+  const left = 3 - (game.tries[id] || 0);
+  ansMsg.textContent = left < 3 ? `${left} ${left === 1 ? 'try' : 'tries'} left.` : '';
+  ansMsg.className = 'msg';
+  ansBox.classList.remove('hidden');
+  setTimeout(() => ansInput.focus(), 0);
+}
+function markDone(id, cls) {
+  const btn = dotEl(id);
+  btn.classList.remove('selected');
+  btn.classList.add('done', cls);
+  const t = document.createElement('span'); t.className = 'tag'; t.textContent = game.byId[id].name;
+  btn.appendChild(t);
+  game.done.add(id); game.answered++;
+  updateBar();
+  if (game.answered === game.total) setTimeout(() => { if (game) finish(); }, 700);
+}
+ansBox.addEventListener('submit', e => {
+  e.preventDefault();
+  if (!game || !ansFor) return;
+  const id = ansFor, p = game.byId[id], typed = ansInput.value.trim();
+  const g = gradeAnswer(typed, p, game.pool, game.fuzzy);
+  if (g === 'empty') { ansInput.focus(); return; }
+  if (g === 'exact' || g === 'close') {
+    const a = game.tries[id] || 0;
+    if (a === 0) game.firstTry++;
+    if (g === 'close') game.close[id] = typed;
+    closeAnswer();
+    markDone(id, a === 0 ? 'c0' : a === 1 ? 'c1' : 'c2');
+    if (g === 'close') showTag(dotEl(id), 'Close! Check the spelling.', 'info above', 2200);
+    return;
+  }
+  game.tries[id] = (game.tries[id] || 0) + 1;
+  (game.wrong[id] = game.wrong[id] || []).push(typed);
+  if (game.tries[id] >= 3) {
+    closeAnswer();
+    markDone(id, 'missed');
+    showTag(dotEl(id), 'Here is the answer.', 'bad above', 2200);
+    return;
+  }
+  const left = 3 - game.tries[id];
+  ansMsg.textContent = `Not quite. ${left} ${left === 1 ? 'try' : 'tries'} left.`;
+  ansMsg.className = 'msg bad';
+  ansBox.classList.remove('shake'); void ansBox.offsetWidth; ansBox.classList.add('shake');
+  ansInput.select();
+});
+ansInput.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); closeAnswer(); } });
+ansBox.addEventListener('click', e => e.stopPropagation());
+plStage.addEventListener('click', e => { if (ansFor && !e.target.closest('.dot, .popover')) closeAnswer(); });
+
 function finish() {
   clearInterval(timerId);
   tip.classList.add('hidden');
@@ -1392,8 +1540,11 @@ function finish() {
   const pct = Math.round(game.firstTry / game.total * 100);
   $('#rs-head').textContent = pct === 100 ? 'Perfect score!' : pct >= 80 ? 'Nice work!' : pct >= 50 ? 'Getting there!' : 'Keep practicing!';
   $('#rs-score').textContent = pct + '%';
-  $('#rs-sub').textContent = `You found ${game.firstTry} of ${game.total} on the first try in ${fmtTime(elapsed)}.`;
-  const misses = game.order.filter(id => game.tries[id]).sort((a, b) => game.tries[b] - game.tries[a]);
+  closeAnswer();
+  const typeMode = game.mode === 'type';
+  $('#rs-sub').textContent = `You ${typeMode ? 'named' : 'found'} ${game.firstTry} of ${game.total} on the first try in ${fmtTime(elapsed)}.`;
+  const misses = game.order.filter(id => game.tries[id] || game.close[id])
+    .sort((a, b) => (game.tries[b] || 0) - (game.tries[a] || 0));
   const box = $('#rs-misses'); box.innerHTML = '';
   if (!misses.length) {
     box.innerHTML = '<p class="perfect">No misses. You nailed every place!</p>';
@@ -1405,8 +1556,16 @@ function finish() {
       const li = document.createElement('li');
       const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = game.byId[id].name;
       const info = document.createElement('span'); info.className = 'info';
-      const n = game.tries[id];
-      info.textContent = `${n} wrong click${n === 1 ? '' : 's'}. You picked ${game.wrong[id].join(', ')}.`;
+      const n = game.tries[id] || 0;
+      if (!typeMode) {
+        info.textContent = `${n} wrong click${n === 1 ? '' : 's'}. You picked ${game.wrong[id].join(', ')}.`;
+      } else {
+        const parts = [];
+        if (n) parts.push(`${n} wrong ${n === 1 ? 'guess' : 'guesses'}: ${game.wrong[id].map(w => '"' + w + '"').join(', ')}.`);
+        if (n >= 3) parts.push('The answer was shown.');
+        if (game.close[id]) parts.push(`Counted as right, but you typed "${game.close[id]}".`);
+        info.textContent = parts.join(' ');
+      }
       li.append(nm, info); ul.appendChild(li);
     });
     wrap.append(h, ul); box.appendChild(wrap);
